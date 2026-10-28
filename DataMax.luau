@@ -11,6 +11,11 @@
     DataStoreFrameWork
 ]]
 
+--Services
+local DataStoreService = game:GetService("DataStoreService")
+local Session = DataStoreService:GetDataStore("Session")
+
+-- Variables
 local DataStore = {}
 local Instances: { [string]: InstanceData } = {} 
 local Cache = {}
@@ -22,8 +27,11 @@ local RELOAD_DATA_TRY_LIMIT = 3
 -- local functions
 local function DeleteInstance(Player : Player, StoreName : string) : ()
     local key = `{tostring(Player.UserId)}`
-    Cache[`{tostring(Player.UserId)} {StoreName}`] = nil
-    if Instances[key] then
+    Cache[tostring(Player.UserId)][StoreName] = nil
+    Cache[tostring(Player.UserId)] = nil
+
+    if Instances[key] and Instances[key][StoreName] then
+        Instances[key][StoreName] = nil
         Instances[key] = nil
         print(`DataStore instance for player: {Player.Name} and store: {StoreName} has been deleted.`)
     else
@@ -33,125 +41,153 @@ local function DeleteInstance(Player : Player, StoreName : string) : ()
     return
 end
 
-local function IsDataUpdatable(Args : {any}, self : self) : boolean
-    local MultipleArgs = #Args > 1
-
-    if #Args == 0 then
-        warn(`No arguments provided for updating data for player: {self.StoreInfo.PlayerName}. At least one argument is required.`)
+local function IsDataUpdatable(Table : {any}?, self : self) : boolean
+    if self.StoreInfo.StoreType == "Table" and typeof(Table) ~= "table" then
+        warn(`Data to update is not a table for player: {self.Player.Name}. Update operation aborted.`)
         return false
     end
 
-    if MultipleArgs and self.StoreType == "OneValue" then
-        warn(`Multiple arguments provided for updating one-value data for player: {self.StoreInfo.PlayerName}. Only one argument is allowed.`)
+    if self.StoreInfo.StoreType == "OneValue" and typeof(Table) == "table" then
+        warn(`Data to update is a table for player: {self.Player.Name}, but the store type is OneValue. Update operation aborted.`)
         return false
-    end
-
-    if MultipleArgs  then
-        for _, arg in pairs(Args) do
-            if type(arg) == "table" then
-                warn(`Invalid argument type for updating data for player: {self.StoreInfo.PlayerName}. Expected OneValue, got {type(arg)}.`)
-                return false
-            end
-        end
     end
 
     return true
 end
 
+local function DecideTableType(Table : {any}) : WhichTypeToSave
+    local Key = 0
+    local Value = 0
+
+    for k, v in pairs(Table) do
+        if type(k) == "number" then
+            Value += 1
+        else
+            Key += 1
+        end
+    end
+
+    if Key > Value then
+        return "Dictionary"
+    elseif Value > Key then
+        return "Array"
+    elseif Value == Key then
+        return "Auto"
+    end
+
+    return "Auto"
+end
+
 -- Types
-export type TableValues = {
+export type DefaultTableValues = {
     [string]: any 
     -- ... Add as much as you like
 } | {any}
 
 export type self = {
     Player: Player,
+    StringId: string,
     DataStore: DataStore,
     LoadState: boolean?,
+    LoadSessionState: boolean?,
     ReloadTryCount: number,
-    StoreType: "Table" | "OneValue",
     AutoSave: thread?,
     Saving: boolean,
+    CurrentData: WhatYouSet?,
+
     StoreInfo: {
-        Player: Player,
-        PlayerName: string,
-        PlayerUserId: number,
-        StoreName: string,
-        StoreType: "Table" | "OneValue",
-        AnyAnyDataName: string | nil,
-        AnyAnyDataValue: number | string | boolean | Instance? | nil,
-        TableName: string | nil,
-        TableValues: TableValues | nil
+        StoreType: StoreType,
+        OneValueName: string?,
+        OneValueValue: number | string | boolean | Instance? | nil,
+        TableName: string?,
+        DefaultTableValues: DefaultTableValues?,
+        CacheNeededState: CacheNeededStates,
     }
 }
 
-export type WhatYouSet = any | TableValues | number | string | boolean | Instance
+export type StoreType = "Table" | "OneValue"
+export type WhatYouSet = any | DefaultTableValues | number | string | boolean | Instance -- ... many many
 export type AutoSaveInterval = number 
 export type CacheNeededStates = true | false | "Idk" -- "Idk" durumu sana Cache verir fakat ister kullan ister kullanma sana kalmis
-
+export type WhichTypeToSave = "Array" | "Dictionary" | "Auto"
 export type InstanceData = { [string]: self }
-export type AdditionalData = boolean | number | string | Instance | any -- Now it no take table value but it could be coming soon
+export type AdditionalData = boolean | number | string | Instance | any | {} -- Now it no take table value but it could be coming soon
+export type Transactions = "Update" | "Add" | "Remove" | "Set" -- Update: Table, Add: Table, Remove: Table, Set: OneValue
+
+export type OneValueConfig = {
+    StoreType: "OneValue",
+    Value: {
+        Name: string,
+        Default: number | string | boolean | Instance?
+    },
+    AutoSave: AutoSaveInterval?,
+    CacheNeeded: CacheNeededStates?
+}
+
+export type TableConfig = {
+    StoreType: "Table",
+    TableName: string,
+    DefaultTableValues: DefaultTableValues?,
+    AutoSave: AutoSaveInterval?,
+    CacheNeeded: CacheNeededStates?
+}
+
+type DataStoreConfig = OneValueConfig | TableConfig
 
 -- Constructor
 function DataStore.new(
     Player : Player,
     Store : DataStore,
-    StoreType : "Table" | "OneValue",
-    AnyAnyData : {AnyAnyDataName: string, AnyAnyDataValue: number | string | boolean | Instance?} | nil, -- This Type For one value
-    HasTable : {TableName: string} | nil,
-    TableValues : TableValues?,
-    ThisDataNeedAutoSave :  AutoSaveInterval?,
-    CacheNeeded : CacheNeededStates?
+    Config : DataStoreConfig
 ) : self | nil
 
     if DataStore.GetInstance(Player, Store.Name) then 
         warn(`DataStore instance already exists for player: {Player.Name} and store: {Store.Name}`)
         return nil
     end
+    local key = `{tostring(Player.UserId)}`
 
     local self = setmetatable({}, DataStore) :: any
 
     self.Player = Player
-    self.DataStore = Store
-    self.StoreType = StoreType
+    self.StringId = tostring(Player.UserId)
     self.AutoSave = nil :: thread?
+    self.DataStore = Store
     self.LoadState = nil :: boolean?
+    self.LoadSessionState = nil :: boolean?
     self.Saving = false :: boolean
     self.ReloadTryCount = RELOAD_DATA_TRY_LIMIT :: number
+    self.CurrentData = nil :: WhatYouSet?
 
-    if ThisDataNeedAutoSave then
+    if Config.AutoSave then
         self.AutoSave = task.spawn(function()
-            while task.wait(ThisDataNeedAutoSave) do
+            while task.wait(Config.AutoSave) do
+                if not self.LoadState then continue end
                 self:SaveData(true)
             end
         end)
     end
 
-    if CacheNeeded == true then
-        Cache[tostring(Player.UserId)] = Cache[tostring(Player.UserId)] or {}
-        Cache[tostring(Player.UserId)][Store.Name] = {} :: any
-    elseif CacheNeeded == "Idk" then
-        Cache[`{tostring(Player.UserId)} {Store.Name}`] = {}
+    if (Config.CacheNeeded == true or Config.CacheNeeded == "Idk") and Config.StoreType == "Table" then
+        Cache[key] = Cache[key] or {}
+        Cache[key][Store.Name] = {} :: any
+    elseif (Config.CacheNeeded == true or Config.CacheNeeded == "Idk") and Config.StoreType == "OneValue" then
+        Cache[key] = Cache[key]
+        Cache[key][Store.Name] = nil
     end
         
     self.StoreInfo = {
-        Player = Player,
-        PlayerName = Player.Name,
-        PlayerUserId = Player.UserId,
-        StoreName = Store.Name,
-        StoreType = StoreType,
-        AnyAnyDataName = type(AnyAnyData) == "table" and AnyAnyData.AnyAnyDataName or nil,
-        AnyAnyDataValue = type(AnyAnyData) == "table" and AnyAnyData.AnyAnyDataValue or nil,
-        AnyAnyDataType = AnyAnyData and typeof(AnyAnyData.AnyAnyDataValue) or nil,
-        TableName = type(HasTable) == "table" and HasTable.TableName or nil,
-        TableValues = type(TableValues) == "table" and TableValues or nil,
-        CacheNeededState = CacheNeeded
+        StoreType = Config.StoreType,
+        OneValueName = Config.StoreType == "OneValue" and Config.Value.Name or nil,
+        OneValueValue = Config.StoreType == "OneValue" and Config.Value.Default or nil,
+        TableName = Config.StoreType == "Table" and Config.TableName or nil,
+        DefaultTableValues = Config.StoreType == "Table" and Config.DefaultTableValues or nil,
+        CacheNeededState = Config.CacheNeeded
     }
 
-    local UserId = tostring(Player.UserId)
-
-    Instances[UserId] = Instances[UserId] or {}
-    Instances[UserId][Store.Name] = self :: any
+    Instances[key] = Instances[key] or {}
+    Instances[key][Store.Name] = self :: any
+    
     return (self :: any) :: self
 end
 
@@ -170,20 +206,11 @@ function DataStore.GetAllStores(Player : Player) : { [string]: self }?
         return nil
     end
 
-    return Instances[`{tostring(Player.UserId)}`]
+    return Instances[tostring(Player.UserId)]
 end
 
 function DataStore.GetAllInstances() : { [string]: InstanceData }
     return Instances
-end
-
-function DataStore:IsHaveCache()
-    if self.StoreInfo.CacheNeededState == true or self.StoreInfo.CacheNeededState == "Idk" then
-        return true
-    else
-        warn(`Cache is not enabled for player: {self.StoreInfo.PlayerName} and store: {self.StoreInfo.StoreName}. Cannot retrieve cache.`)
-        return false
-    end
 end
 
 function DataStore:GetInfo() : ()
@@ -191,45 +218,130 @@ function DataStore:GetInfo() : ()
     return
 end
 
-function DataStore:GetCache() : any
-    if self:IsHaveCache() == false then return nil end
-
-    return Cache[tostring(self.StoreInfo.PlayerUserId)][self.StoreInfo.StoreName]
+function DataStore:IsHaveCache() : (boolean, StoreType)
+    if self.StoreInfo.CacheNeededState == true or self.StoreInfo.CacheNeededState == "Idk" then
+        return true, self.StoreInfo.StoreType
+    else
+        warn(`Cache is not enabled for player: {self.Player.Name} and store: {self.DataStore.Name}. Cannot retrieve cache.`)
+        return false, self.StoreInfo.StoreType
+    end
 end
 
-function DataStore:SetCache(Data : any, DataKey : string?) : ()
-    if self:IsHaveCache() == false then return end
-    if not DataKey then
-        table.insert(Cache[tostring(self.StoreInfo.PlayerUserId)][self.StoreInfo.StoreName], Data)
-    else
-        Cache[tostring(self.StoreInfo.PlayerUserId)][self.StoreInfo.StoreName][DataKey] = Data
+function DataStore:GetCache() : any
+    local HasCache = self:IsHaveCache()
+    if HasCache == false then return nil end
+
+    return Cache[self.StringId][self.DataStore.Name]
+end
+
+function DataStore:SetCache(Data : any, Key : string?) : ()
+    local HasCache, StoreType = self:IsHaveCache()
+    if HasCache == false then return nil end
+
+    if StoreType == "Table" then
+        if not Key then
+            table.insert(Cache[self.StringId][self.DataStore.Name], Data)
+        else
+            Cache[self.StringId][self.DataStore.Name][Key] = Data
+        end
+    elseif StoreType == "OneValue" and not Key then
+        Cache[self.StringId][self.DataStore.Name] = Data
     end
     return
 end
 
 function DataStore:ClearCache() : ()
-    if self:IsHaveCache() == false then return end
+    local HasCache = self:IsHaveCache()
+    if HasCache == false then return end
 
-    Cache[tostring(self.StoreInfo.PlayerUserId)][self.StoreInfo.StoreName] = nil
-    Cache[tostring(self.StoreInfo.PlayerUserId)] = nil
+    if self.StoreInfo.StoreType == "Table" then
+        Cache[self.StringId][self.DataStore.Name] = {}
+    elseif self.StoreInfo.StoreType == "OneValue" then
+        Cache[self.StringId][self.DataStore.Name] = nil
+    end
+
     return
 end
 
 function DataStore:RemoveDataFromCache(Data: any?,Key : string?) : ()
-    if self:IsHaveCache() == false then return end
+    local HasCache, StoreType = self:IsHaveCache()
+    if HasCache == false then return end
 
-    if Data then
-        table.remove(Cache[tostring(self.StoreInfo.PlayerUserId)][self.StoreInfo.StoreName], Data)
-    else
-        Cache[tostring(self.StoreInfo.PlayerUserId)][self.StoreInfo.StoreName][Key] = nil
+    if StoreType == "Table" then
+        if Data then
+            table.remove(Cache[self.StringId][self.DataStore.Name], Data)
+        else
+            Cache[self.StringId][self.DataStore.Name][Key] = nil
+        end
+    elseif StoreType == "OneValue" then
+        Cache[self.StringId][self.DataStore.Name] = nil
     end
+    return 
+end
+
+function DataStore:CacheToSaveData(DeleteOldDataAndOnlyAddCache : boolean?) : () 
+    if self.StoreInfo.StoreType == "Table" then
+        local Addkey
+        local Cache = Cache[self.StringId][self.DataStore.Name]
+
+        if DeleteOldDataAndOnlyAddCache then
+            self.CurrentData = Cache
+            return
+        end
+        local DataTableType = DecideTableType(self.CurrentData)
+        local CacheTableType = DecideTableType(Cache)
+
+        if DataTableType == "Array" then
+            Addkey = false
+        elseif DataTableType == "Dictionary" then
+            Addkey = true
+        elseif DataTableType == "Auto" then
+            warn(`Both Cache and CurrentData are of type "Auto". Defaulting to Dictionary for saving data for player: {self.Player.Name}.`)
+            Addkey = true
+        end
+
+        for k, v in pairs(Cache) do
+            if (CacheTableType == "Dictionary" or CacheTableType == "Auto") and Addkey then
+                if typeof(k) == "number" then continue end
+                self.CurrentData[k] = v
+            elseif not Addkey and CacheTableType == "Array" then
+                table.insert(self.CurrentData, v)
+            end
+        end
+    elseif self.StoreInfo.StoreType == "OneValue" then
+        if DeleteOldDataAndOnlyAddCache then
+            self.CurrentData = Cache
+            return
+        end
+
+        if typeof(Cache) == "number" then
+            self.CurrentData = (self.CurrentData :: any) + (Cache :: any)
+        end
+    end
+
     return
 end
 
 function DataStore:LoadData() : WhatYouSet?
+    local SessionControl
+
+    if not self.LoadSessionState then
+        self.LoadSessionState = true
+        SessionControl = self:UpdateSessionOrGet(false)
+    else
+        SessionControl = self:UpdateSessionOrGet(true)
+    end
+
+    if SessionControl.Session.JobId ~= game.JobId then
+        warn(`Session mismatch for player: {self.Player.Name}. Data may not be saved correctly.`)
+        self:Destroy()
+        return nil
+    end
+
     local success, Data = pcall(function()
-        return self.DataStore:GetAsync(tostring(`{self.StoreInfo.PlayerUserId} {self.StoreInfo.StoreName}`))
+        return self.DataStore:GetAsync(`{self.StringId} {self.DataStore.Name}`)
     end)
+
     if not success then
         self.ReloadTryCount = (self.ReloadTryCount :: any) - 1
     end
@@ -237,21 +349,28 @@ function DataStore:LoadData() : WhatYouSet?
     self.LoadState = success
 
     if success and Data ~= nil  then
-        print(`Data loaded successfully for player: {self.StoreInfo.PlayerName}`)
+        print(`Data loaded successfully for player: {self.Player.Name}`)
+        self.CurrentData = Data
+
         return Data
     elseif success and Data == nil then
-        warn(`No data found for player: {self.StoreInfo.PlayerName}. Initializing with default values.`)
+        warn(`No data found for player: {self.Player.Name}. Initializing with default values.`)
+        if self.StoreInfo.StoreType == "Table" then
+            self.CurrentData = self.StoreInfo.DefaultTableValues or {}
+        elseif self.StoreInfo.StoreType == "OneValue" then
+            self.CurrentData = self.StoreInfo.OneValueValue
+        end
         return nil
     else
-        warn(`Failed to load data for player: {self.StoreInfo.PlayerName} Error: {Data}`)
+        warn(`Failed to load data for player: {self.Player.Name} Error: {Data}`)
         if self.ReloadTryCount > 0 then
-            print(`Retrying to load data for player: {self.StoreInfo.PlayerName}. Attempts left: {self.ReloadTryCount}`)
+            print(`Retrying to load data for player: {self.Player.Name}. Attempts left: {self.ReloadTryCount}`)
             task.wait(1) 
             self:LoadData()
         else
-            warn(`Exceeded maximum retry attempts for loading data for player: {self.StoreInfo.PlayerName}.`)
+            warn(`Exceeded maximum retry attempts for loading data for player: {self.Player.Name}.`)
             self.LoadState = false
-            self.StoreInfo.Player:Kick("Data loading failed. Please try again later.")
+            self.Player:Kick("Data loading failed. Please try again later.")
         end
     end
 
@@ -265,32 +384,41 @@ function DataStore:Destroy() : ()
     end
 
     task.wait(.5)
-    DeleteInstance(self.Player, self.StoreInfo.StoreName)
+    DeleteInstance(self.Player, self.DataStore.Name)
 
     return
 end
 
-function DataStore:SaveData(AutoSave: boolean | nil) : ()
+function DataStore:SaveData(AutoSave: boolean?) : ()
     if self.Saving then 
-        warn(`Data is already being saved for player: {self.StoreInfo.PlayerName}. Please wait until the current save operation is complete.`)
+        warn(`Data is already being saved for player: {self.Player.Name}. Please wait until the current save operation is complete.`)
         return 
     end
-    -- this line repeated twice cuz we was need speed this line(repeatted line 311)
+
+    -- this line repeated twice cuz we was need speed this line(repeatted line 445)
     if not AutoSave then
         self.Saving = true
     end
 
+    local SessionControl = self:UpdateSessionOrGet(true)
+
+    if SessionControl.Session.JobId ~= game.JobId or SessionControl.Session.PlaceId ~= game.PlaceId then
+        warn(`Session mismatch for player: {self.Player.Name}. Data may not be saved correctly.`)
+        self:Destroy()
+        return
+    end
+
     if not self.LoadState then
-        warn(`Data for player: {self.StoreInfo.PlayerName} has not been loaded yet. Cannot save data.`)
+        warn(`Data for player: {self.Player.Name} has not been loaded yet. Cannot save data.`)
         self:Destroy()
         return
     end
 
     local success, ErrMsg = pcall(function()
-        if self.StoreType == "Table" then
-            self.DataStore:SetAsync(tostring(`{self.StoreInfo.PlayerUserId} {self.StoreInfo.StoreName}`), self.StoreInfo.TableValues)
-        elseif self.StoreType == "OneValue" then
-            local DataValue = self.StoreInfo.AnyAnyDataValue 
+        if self.StoreInfo.StoreType == "Table" then
+            self.DataStore:SetAsync(`{self.StringId} {self.DataStore.Name}`, self.CurrentData)
+        elseif self.StoreInfo.StoreType == "OneValue" then
+            local DataValue = self.CurrentData
             local WhatISave = nil
 
             if typeof(DataValue) == "Instance" and DataValue:IsA("ValueBase") then
@@ -298,14 +426,14 @@ function DataStore:SaveData(AutoSave: boolean | nil) : ()
             else
                 WhatISave = DataValue
             end
-            self.DataStore:SetAsync(tostring(`{self.StoreInfo.PlayerUserId} {self.StoreInfo.StoreName}`), WhatISave)
+            self.DataStore:SetAsync(`{self.StringId} {self.DataStore.Name}`, WhatISave)
         end
     end)
 
     if success then 
-    print(`Data saved successfully for player: {self.StoreInfo.PlayerName}`)
+        print(`Data saved successfully for player: {self.Player.Name}`)
     else
-        warn(`Failed to save data for player: {self.StoreInfo.PlayerName} Error: {ErrMsg}`)
+        warn(`Failed to save data for player: {self.Player.Name} Error: {ErrMsg}`)
     end
 
     if not AutoSave then
@@ -315,30 +443,131 @@ function DataStore:SaveData(AutoSave: boolean | nil) : ()
     return
 end
 
-function DataStore:UpdateData(... : AdditionalData) : ()
-    local Args = {...}
-    local IsUpdatadble = IsDataUpdatable(Args, self)
+function DataStore:Add(DataToAdd: AdditionalData): ()
+    if not IsDataUpdatable((DataToAdd :: any), self) then return end
+    if self.CurrentData == nil then return end
 
-    if not IsUpdatadble then return end
+    if self.StoreInfo.StoreType == "Table" then
+        local CurrentData = self.CurrentData :: any
+        local CurrentDataType = DecideTableType(CurrentData)
 
-    local success, Data = pcall(function()
-         return self.DataStore:UpdateAsync(tostring(`{self.StoreInfo.PlayerUserId} {self.StoreInfo.StoreName}`), function(oldData)
-                if self.StoreType == "Table" then
-                    -- I am lazy nigga, could be make after
-                elseif self.StoreType == "OneValue" then
-                    -- I am lazy nigga, could be make after
-                end
-            return
-         end)
-    end)
-
-    if success then
-        print(`Data updated successfully for player: {self.StoreInfo.PlayerName}`)
-    else
-        warn(`Failed to update data for player: {self.StoreInfo.PlayerName} Error: {Data}`)
+        for k, v in pairs(DataToAdd :: any) do
+            if CurrentDataType == "Dictionary" then
+                CurrentData[k] = v
+            elseif CurrentDataType == "Array" then
+                table.insert(CurrentData, v)
+            end
+        end
+    elseif self.StoreInfo.StoreType == "OneValue" then
+        warn(`Add operation is not applicable for OneValue data type for player: {self.Player.Name}. Use Update or Set instead.`)
+        return
     end
 
+    print(`Data added successfully for player: {self.Player.Name}`)
+    ;(self :: any):SaveData(true)
     return
+end
+
+function DataStore:Remove(DataToRemove: AdditionalData): ()
+    if not IsDataUpdatable((DataToRemove :: any), self) then return end
+    if self.CurrentData == nil then return end
+
+    if self.StoreInfo.StoreType == "Table" then
+        local CurrentData = self.CurrentData :: any
+        local CurrentDataType = DecideTableType(CurrentData)
+
+        for k, v in pairs(DataToRemove :: any) do
+            if CurrentDataType == "Dictionary" then
+                if CurrentData[k] ~= nil then
+                    CurrentData[k] = nil
+                end
+            elseif CurrentDataType == "Array" then
+                local Index = table.find(CurrentData, v)
+
+                if Index then
+                    table.remove(CurrentData, Index)
+                end
+            end
+        end
+    elseif self.StoreInfo.StoreType == "OneValue" then
+        self.CurrentData = nil
+    end
+
+    print(`Data removed successfully for player: {self.Player.Name}`)
+    ;(self :: any):SaveData(true)
+    return 
+end
+
+function DataStore:Set(NewData: AdditionalData): ()
+    if not IsDataUpdatable((NewData :: any), self) then return end
+
+    self.CurrentData = NewData
+
+    print(`Data set successfully for player: {self.Player.Name}`)
+    ;(self :: any):SaveData(true)
+end
+
+function DataStore:Update(DataToUpdate: AdditionalData): ()
+    if not IsDataUpdatable((DataToUpdate :: any), self) then return end
+    if self.CurrentData == nil then return end
+
+    if self.StoreInfo.StoreType == "Table" then
+        local CurrentData = self.CurrentData :: any
+        local CurrentDataType = DecideTableType(CurrentData)
+
+        for k, v in pairs(DataToUpdate :: any) do
+            if CurrentDataType == "Dictionary" then
+                CurrentData[k] = v
+            elseif CurrentDataType == "Array" then
+                table.insert(CurrentData, v)
+            end
+        end
+    elseif self.StoreInfo.StoreType == "OneValue" then
+        local CurrentData = self.CurrentData
+
+        if typeof(CurrentData) == "number" then
+            self.CurrentData = CurrentData + (DataToUpdate :: number)
+        elseif typeof(CurrentData) == "Instance" and CurrentData:IsA("ValueBase") then
+            (CurrentData :: any).Value += (DataToUpdate :: number)
+        end
+    end
+
+    ;(self :: any):SaveData(true)
+
+    print(`Data updated successfully for player: {self.Player.Name}`)
+end
+
+function DataStore:UpdateSessionOrGet(Get : boolean?) : {[string]: string | number}?
+    if Get == true then
+        local succ, data = pcall(function()
+            return Session:GetAsync({`{self.StringId} {self.DataStore.Name}`})
+        end)
+
+        if succ and data then
+            return data
+        end
+    end
+
+    local succ, data = pcall(function()
+        return Session:UpdateAsync({`{self.StringId} {self.DataStore.Name}`}, function(Data)
+            Data = Data or {}
+
+            Data.Session = {
+                JobId = game.JobId,
+                PlaceId = game.PlaceId
+            }
+
+            return Data
+        end)
+    end)
+
+    if not succ then
+        self:UpdateSessionOrGet()
+    elseif succ and data then
+        return data
+    end
+
+    return nil
 end
 
 return DataStore
@@ -347,19 +576,6 @@ return DataStore
     it was considered
 
     Error Handling Control for Constructor(assert)
-    Usable Cache(Add to table or add One Value)
     Client GetInstance Function, but this is risky ⚠️
-    Session will be added
-    Get
-    Set
-    Data.Init will be added
-
-    this task when finished, things to be:
-    Maximum Optimization
-    Useless lines, will be deleted
-    Variables will be made more readable
-    
-    Now Errors:
-    DeleteInstance bır store sılınce oyuncunun dıger storelarını da dusuruyor suanda usendıgım ıcın yaparım bı ara
-    Load data islendiginde Intances tablosu guncellenmeli guncel oradaki veriler ile
+    Maybe Http requests
     ]]
