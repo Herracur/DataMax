@@ -24,8 +24,10 @@ local RELOAD_DATA_TRY_LIMIT = 3
 -- local functions
 local function DeleteInstance(Player: Player, StoreName: string): ()
 	local key = `{tostring(Player.UserId)}`
-	Cache[tostring(Player.UserId)][StoreName] = nil
-	Cache[tostring(Player.UserId)] = nil
+	
+	if Cache[tostring(Player.UserId)] then
+		Cache[tostring(Player.UserId)][StoreName] = nil
+	end
 
 	if Instances[key] and Instances[key][StoreName] then
 		Instances[key][StoreName] = nil
@@ -34,7 +36,7 @@ local function DeleteInstance(Player: Player, StoreName: string): ()
 	else
 		warn(`No DataStore instance found for player: {Player.Name} and store: {StoreName}.`)
 	end
-
+	
 	return
 end
 
@@ -106,7 +108,7 @@ export type self = {
 	-- Functions type
 	IsHaveCache: (self: self) -> (boolean, StoreType),
 	GetCache: (self: self) -> any,
-	SetCache: (self: self, Data: any, Key: string?) -> (),
+	AddCache: (self: self, Data: any, Key: string?) -> (),
 	ClearCache: (self: self) -> (),
 	RemoveDataFromCache: (self: self, Data: any?, Key: string?) -> (),
 	CacheToSaveData: (self: self, DeleteOldDataAndOnlyAddCache: boolean?) -> (),
@@ -251,7 +253,7 @@ function DataStore:GetCache(): any
 	return Cache[self.StringId][self.DataStore.Name]
 end
 
-function DataStore:SetCache(Data: any, Key: string?): ()
+function DataStore:AddCache(Data: any, Key: string?): ()
 	local HasCache, StoreType = self:IsHaveCache()
 	if HasCache == false then
 		return nil
