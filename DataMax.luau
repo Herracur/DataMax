@@ -57,6 +57,10 @@ local function IsDataUpdatable(Table: { any }?, self: self): boolean
 end
 
 local function DecideTableType(Table: { any }): WhichTypeToSave
+	if next(Table) == nil then
+		error("Cannot decide table type for an empty table. Please provide a non-empty table.")
+	end
+
 	local Key = 0
 	local Value = 0
 
@@ -109,6 +113,7 @@ export type self = {
 	IsHaveCache: (self: self) -> (boolean, StoreType),
 	GetCache: (self: self) -> any,
 	AddCache: (self: self, Data: any, Key: string?) -> (),
+	SetCache: (self: self, Data: any) -> (),
 	ClearCache: (self: self) -> (),
 	RemoveDataFromCache: (self: self, Data: any?, Key: string?) -> (),
 	CacheToSaveData: (self: self, DeleteOldDataAndOnlyAddCache: boolean?) -> (),
@@ -120,7 +125,6 @@ export type self = {
 	Set: (self: self, NewData: AdditionalData) -> (),
 	Update: (self: self, DataToUpdate: AdditionalData) -> (),
 	UpdateSessionOrGet: (self: self, Get: boolean?) -> { [string]: string | number }?,
-	GlobalUserProcess: (self: self, Transaction: Transactions) -> (),
 }
 
 export type StoreType = "Table" | "OneValue"
@@ -266,8 +270,33 @@ function DataStore:AddCache(Data: any, Key: string?): ()
 			Cache[self.StringId][self.DataStore.Name][Key] = Data
 		end
 	elseif StoreType == "OneValue" and not Key then
+		if typeof(Data) == "number" and typeof(Cache[self.StringId][self.DataStore.Name]) == "number" then
+			Cache[self.StringId][self.DataStore.Name] += Data
+		else
+			warn(`One value cannot add any cache for player: {self.Player.Name}. Use SetCache instead.`)
+		end
+	end
+
+	return
+end
+
+function DataStore:SetCache(Data: any): ()
+	local HasCache, StoreType = self:IsHaveCache()
+	if HasCache == false then
+		return nil
+	end
+
+	if StoreType == "Table" then
+		if typeof(Data) ~= "table" then
+			warn(`Data to set cache is not a table for player: {self.Player.Name}. SetCache operation aborted.`)
+			return
+		end
+		Cache[self.StringId][self.DataStore.Name] = {}
+		table.insert(Cache[self.StringId][self.DataStore.Name], Data)
+	elseif StoreType == "OneValue" then
 		Cache[self.StringId][self.DataStore.Name] = Data
 	end
+
 	return
 end
 
@@ -305,7 +334,18 @@ function DataStore:RemoveDataFromCache(Data: any?, Key: string?): ()
 end
 
 function DataStore:CacheToSaveData(DeleteOldDataAndOnlyAddCache: boolean?): ()
-	if self.StoreInfo.StoreType == "Table" then
+	self = self :: any
+
+	if self.StoreInfo.StoreType == "OneValue" then
+		if DeleteOldDataAndOnlyAddCache then
+			self.CurrentData = Cache
+			return
+		end
+
+		if typeof(Cache) == "number" then
+			self.CurrentData = (self.CurrentData :: any) + (Cache :: any)
+		end
+	elseif self.StoreInfo.StoreType == "Table" then
 		local Addkey
 		local Cache = Cache[self.StringId][self.DataStore.Name]
 
@@ -321,9 +361,7 @@ function DataStore:CacheToSaveData(DeleteOldDataAndOnlyAddCache: boolean?): ()
 		elseif DataTableType == "Dictionary" then
 			Addkey = true
 		elseif DataTableType == "Auto" then
-			warn(
-				`Both Cache and CurrentData are of type "Auto". Defaulting to Dictionary for saving data for player: {self.Player.Name}.`
-			)
+			warn(`Both Cache and CurrentData are of type "Auto". Defaulting to Dictionary for saving data for player: {self.Player.Name}.`)
 			Addkey = true
 		end
 
@@ -336,15 +374,6 @@ function DataStore:CacheToSaveData(DeleteOldDataAndOnlyAddCache: boolean?): ()
 			elseif not Addkey and CacheTableType == "Array" then
 				table.insert(self.CurrentData, v)
 			end
-		end
-	elseif self.StoreInfo.StoreType == "OneValue" then
-		if DeleteOldDataAndOnlyAddCache then
-			self.CurrentData = Cache
-			return
-		end
-
-		if typeof(Cache) == "number" then
-			self.CurrentData = (self.CurrentData :: any) + (Cache :: any)
 		end
 	end
 
@@ -426,14 +455,13 @@ function DataStore:SaveData(AutoSave: boolean?): ()
 		return
 	end
 
-	-- this line repeated twice cuz we was need speed this line(repeatted line 445)
 	if not AutoSave then
 		self.Saving = true
 	end
 
 	local SessionControl = self:UpdateSessionOrGet(true)
 
-	if SessionControl.Session.JobId ~= game.JobId or SessionControl.Session.PlaceId ~= game.PlaceId then
+	if  SessionControl.Session.JobId ~= game.JobId or SessionControl.Session.PlaceId ~= game.PlaceId then
 		warn(`Session mismatch for player: {self.Player.Name}. Data may not be saved correctly.`)
 		self:Destroy()
 		return
