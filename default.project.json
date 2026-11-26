@@ -1,0 +1,87 @@
+{
+  "name": "DataMax",
+  "tree": {
+    "$className": "DataModel",
+
+    "ReplicatedStorage": {
+      "$path": "src/replica",
+      "global": {
+        "$path": "src/replica/global",
+        "$className": "Folder",
+
+        "DataMaxTypes": {
+          "$path": "src/replica/global/DataMaxTypes.luau",
+          "$className": "ModuleScript"
+        }
+      }
+    },
+
+    "ServerScriptService": {
+      "$path": "src/server",
+      "DataMax": {
+        "$path": "src/server/DataMax",
+        "$className": "Folder",
+
+        "Cache": {
+          "$path": "src/server/DataMax/Cache.luau",
+          "$className": "ModuleScript"
+        },
+
+        "DataStore": {
+          "$path": "src/server/DataMax/DataStore.luau",
+          "$className": "ModuleScript"
+        }
+      }
+    },
+
+    "StarterPlayer": {
+      "$path": "src/client"
+    },
+
+    "Workspace": {
+      "$properties": {
+        "FilteringEnabled": true
+      },
+      "Baseplate": {
+        "$className": "Part",
+        "$properties": {
+          "Anchored": true,
+          "Color": [
+            0.38823,
+            0.37254,
+            0.38823
+          ],
+          "Locked": true,
+          "Position": [
+            0,
+            -10,
+            0
+          ],
+          "Size": [
+            512,
+            20,
+            512
+          ]
+        }
+      }
+    },
+    "Lighting": {
+      "$properties": {
+        "Ambient": [
+          0,
+          0,
+          0
+        ],
+        "Brightness": 2,
+        "GlobalShadows": true,
+        "Outlines": false,
+        "Technology": "Voxel"
+      }
+    },
+    "SoundService": {
+      "$properties": {
+        "RespectFilteringEnabled": true
+      }
+    }
+  }
+}
