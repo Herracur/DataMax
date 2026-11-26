@@ -9,9 +9,8 @@
         "$path": "src/replica/global",
         "$className": "Folder",
 
-        "DataMaxTypes": {
-          "$path": "src/replica/global/DataMaxTypes.luau",
-          "$className": "ModuleScript"
+        "GeneralDataTypes": {
+          "$path": "src/replica/global/GeneralDataTypes.luau"
         }
       }
     },
@@ -23,13 +22,15 @@
         "$className": "Folder",
 
         "Cache": {
-          "$path": "src/server/DataMax/Cache.luau",
-          "$className": "ModuleScript"
+          "$path": "src/server/DataMax/Cache.luau"
         },
 
         "DataStore": {
-          "$path": "src/server/DataMax/DataStore.luau",
-          "$className": "ModuleScript"
+          "$path": "src/server/DataMax/DataStore.luau"
+        },
+        
+        "Helper": {
+          "$path": "src/server/DataMax/Helper.luau"
         }
       }
     },

@@ -55,11 +55,11 @@ export type self = {
 export type StoreType = "Table" | "OneValue"
 export type WhatYouSet = any | DefaultTableValues | number | string | boolean | Instance -- ... many many
 export type AutoSaveInterval = number
-export type CacheNeededStates = true | false | "Idk" -- "Idk" durumu sana Cache verir fakat ister kullan ister kullanma sana kalmis
+export type CacheNeededStates = true | false | "Idk"
 export type WhichTypeToSave = "Array" | "Dictionary" | "Auto"
 export type InstanceData = { [string]: self }
-export type AdditionalData = boolean | number | string | Instance | any | {} -- Now it no take table value but it could be coming soon
-export type Transactions = "Update" | "Add" | "Remove" | "Set" -- Update: Table, Add: Table, Remove: Table, Set: OneValue
+export type AdditionalData = boolean | number | string | Instance | any | {}
+export type Transactions = "Update" | "Add" | "Remove" | "Set"
 export type DebugType = "print" | "warn" | "error"
 export type OneValueConfig = {
 	StoreType: "OneValue",

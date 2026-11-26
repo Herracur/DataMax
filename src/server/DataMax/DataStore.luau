@@ -85,7 +85,7 @@ function DataStore.new(player: Player, store: DataStore, config: Types.DataStore
 
 	Instances[key] = Instances[key] or {}
 	Instances[key][store.Name] = self :: any
-
+	
 	return (self :: any) :: Types.self
 end
 
