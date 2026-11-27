@@ -12,6 +12,7 @@
 local ServerScriptService = game:GetService("ServerScriptService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local DataStoreService = game:GetService("DataStoreService")
+local HttpService = game:GetService("HttpService")
 local Session = DataStoreService:GetDataStore("Session")
 
 -- Types
@@ -30,9 +31,66 @@ DataStore.__index = DataStore
 -- Variables
 local LOAD_DATA_TRY_LIMIT = 3
 local SAVE_DATA_TRY_LIMIT = 3
+local SESSION_LEASE_SECONDS = 300
+local SESSION_HEARTBEAT_INTERVAL = 60
+local SessionTokens: { [string]: string } = {}
+local SessionHeartbeats: { [string]: thread } = {}
 
 -- Helper functions
 local Helper = require(DataMax:WaitForChild("Helper"))
+
+local function ReleaseSession(playerId: string, token: string): ()
+	local success, err = pcall(function()
+		Session:UpdateAsync(playerId, function(record: any)
+			if typeof(record) ~= "table" then
+				return nil
+			end
+
+			local lock = record.Session
+			if typeof(lock) ~= "table" or lock.JobId ~= game.JobId or lock.Token ~= token then
+				return nil
+			end
+
+			record.Session = nil
+			return record
+		end)
+	end)
+
+	if not success then
+		warn(`Failed to release session for player {playerId}: {err}`)
+	end
+end
+
+local function StartSessionHeartbeat(store: Types.self): ()
+	local playerId = store.StringId
+	if SessionHeartbeats[playerId] then
+		return
+	end
+
+	SessionHeartbeats[playerId] = task.spawn(function()
+		while true do
+			task.wait(SESSION_HEARTBEAT_INTERVAL)
+
+			local playerStores = Instances[playerId]
+			local activeStore = if playerStores then select(2, next(playerStores)) else nil
+			if not activeStore then
+				SessionHeartbeats[playerId] = nil
+				return
+			end
+
+			local session, status = activeStore:UpdateSessionOrGet(true)
+			if not session and status == "conflict" then
+				activeStore:Debug("warn", `Session ownership was lost for player: {activeStore.Player.Name}.`)
+				activeStore.Player:Kick("Your session moved to another server. Please rejoin.")
+				activeStore:DestroyAll()
+				SessionHeartbeats[playerId] = nil
+				return
+			elseif not session then
+				activeStore:Debug("warn", `Could not refresh session for player: {activeStore.Player.Name}. Retrying later.`)
+			end
+		end
+	end)
+end
 
 -- Constructor
 function DataStore.new(player: Player, store: DataStore, config: Types.DataStoreConfig): Types.self | nil
@@ -166,22 +224,32 @@ function DataStore:WaitForLoad(timeout: number?): boolean
 end
 
 function DataStore:LoadData(): Types.WhatYouSet?
-	local sessionControl
+	local sessionControl: Types.SessionLock?
+	local sessionStatus: string?
 
 	if not self.LoadSessionState then
-		self.LoadSessionState = true
-		sessionControl = self:UpdateSessionOrGet(false)
+		sessionControl, sessionStatus = self:UpdateSessionOrGet(false)
 	else
-		sessionControl = self:UpdateSessionOrGet(true)
+		sessionControl, sessionStatus = self:UpdateSessionOrGet(true)
 	end
 
 	if not sessionControl then
-		self.Player:Kick("Your Session have a problem. Please rejoin")
+		self.LoadState = false
+		if sessionStatus == "conflict" then
+			self.Player:Kick("Your data is already loaded in another server. Please rejoin.")
+		else
+			self.Player:Kick("Your session could not be verified. Please rejoin.")
+		end
 		self:DestroyAll()
+		return nil
 	end
 
-	if sessionControl.Session.JobId ~= game.JobId then
+	self.LoadSessionState = true
+	StartSessionHeartbeat(self)
+
+	if sessionControl.JobId ~= game.JobId or sessionControl.PlaceId ~= game.PlaceId then
 		self:Debug("warn", `Session mismatch for player: {self.Player.Name}. Data may not be saved correctly.`)
+		self.LoadState = false
 		self:DestroyAll()
 		return nil
 	end
@@ -191,7 +259,7 @@ function DataStore:LoadData(): Types.WhatYouSet?
 	end)
 
 	if not success then
-		self.ReloadTryCount = (self.ReloadTryCount :: any) - 1
+		self.LoadTryCount = (self.LoadTryCount :: any) - 1
 	end
 
 	self.LoadState = success
@@ -211,14 +279,15 @@ function DataStore:LoadData(): Types.WhatYouSet?
 		return nil
 	else
 		self:Debug("warn", `Failed to load data for player: {self.Player.Name} Error: {Data}`)
-		if self.ReloadTryCount > 0 then
-			self:Debug("print", `Retrying to load data for player: {self.Player.Name}. Attempts left: {self.ReloadTryCount}`)
+		if self.LoadTryCount > 0 then
+			self:Debug("print", `Retrying to load data for player: {self.Player.Name}. Attempts left: {self.LoadTryCount}`)
 			task.wait(1)
 			self:LoadData()
 		else
 			self:Debug("warn", `Exceeded maximum retry attempts for loading data for player: {self.Player.Name}.`)
 			self.LoadState = false
 			self.Player:Kick("Data loading failed. Please try again later.")
+			self:DestroyAll()
 		end
 	end
 
@@ -241,10 +310,11 @@ function DataStore:Destroy(): ()
 		self.Cache = nil
 	end
 
-	if Instances[self.StringId] and Instances[self.StringId][self.DataStore.Name] then
-		Instances[self.StringId][self.DataStore.Name] = nil
+	local playerStores = Instances[self.StringId]
+	if playerStores and playerStores[self.DataStore.Name] then
+		playerStores[self.DataStore.Name] = nil
 
-		if next(Instances[self.StringId]) == nil then
+		if next(playerStores) == nil then
 			Instances[self.StringId] = nil
 		end
 
@@ -253,18 +323,31 @@ function DataStore:Destroy(): ()
 		self:Debug("warn", `No DataStore instance found for player: {self.Player.Name} and store: {self.DataStore.Name}.`)
 	end
 
+	if not Instances[self.StringId] then
+		local token = SessionTokens[self.StringId]
+		SessionTokens[self.StringId] = nil
+		if token then
+			ReleaseSession(self.StringId, token)
+		end
+	end
+
 	return
 end
 
 function DataStore:DestroyAll():()
-	for _, Store in pairs(Instances[self.StringId]) do
-		if next(Store) == nil then
-			continue
-		end
+	local playerStores = Instances[self.StringId]
+	if not playerStores then
+		return
+	end
 
-		if Store and not Store.Destroyed then
-			Store.Destroyed = true
-			Store:Destroy()
+	local storesToDestroy = {}
+	for _, store in pairs(playerStores) do
+		table.insert(storesToDestroy, store)
+	end
+
+	for _, store in ipairs(storesToDestroy) do
+		if not store.Destroyed then
+			store:Destroy()
 		end
 	end
 
@@ -274,6 +357,11 @@ end
 function DataStore:SaveData(autoSave: boolean?, saveError: boolean?): ()
 	if self.Saving and not saveError then
 		self:Debug("warn", `Data is already being saved for player: {self.Player.Name}. Please wait until the current save operation is complete.`)
+		return
+	end
+
+	if not self.LoadState then
+		self:Debug("warn", `Data for player: {self.Player.Name} has not been loaded yet. Cannot save data.`)
 		return
 	end
 
@@ -291,16 +379,21 @@ function DataStore:SaveData(autoSave: boolean?, saveError: boolean?): ()
 		self.Saving = true
 	end
 
-	local sessionControl = self:UpdateSessionOrGet(true)
+	local sessionControl, sessionStatus = self:UpdateSessionOrGet(true)
 
-	if  sessionControl.Session.JobId ~= game.JobId or sessionControl.Session.PlaceId ~= game.PlaceId then
-		self:Debug("warn", `Session mismatch for player: {self.Player.Name}. Data may not be saved correctly.`)
-		self:Destroy()
+	if not sessionControl then
+		if sessionStatus == "conflict" then
+			self:Debug("warn", `Session ownership was lost for player: {self.Player.Name}.`)
+			self.Player:Kick("Your session moved to another server. Please rejoin.")
+			self:DestroyAll()
+		else
+			self:Debug("warn", `Session could not be verified for player: {self.Player.Name}. Save aborted.`)
+		end
 		return
 	end
 
-	if not self.LoadState then
-		self:Debug("warn", `Data for player: {self.Player.Name} has not been loaded yet. Cannot save data.`)
+	if sessionControl.JobId ~= game.JobId or sessionControl.PlaceId ~= game.PlaceId then
+		self:Debug("warn", `Session mismatch for player: {self.Player.Name}. Data may not be saved correctly.`)
 		self:Destroy()
 		return
 	end
@@ -446,37 +539,68 @@ function DataStore:Update(DataToUpdate: Types.AdditionalData): ()
 	self:Debug("print", `Data updated successfully for player: {self.Player.Name}`)
 end
 
-function DataStore:UpdateSessionOrGet(get: boolean?): { [string]: string | number }?
-	if get == true then
-		local succ, data = pcall(function()
-			return Session:GetAsync(self.StringId)
-		end)
-
-		if succ and data then
-			return data
+function DataStore:UpdateSessionOrGet(validateOnly: boolean?): (Types.SessionLock?, string?)
+	local playerId = self.StringId
+	local token = SessionTokens[playerId]
+	if not token then
+		if validateOnly == true then
+			return nil, "conflict"
 		end
+
+		token = HttpService:GenerateGUID(false)
+		SessionTokens[playerId] = token
 	end
 
-	local succ, data = pcall(function()
-		return Session:UpdateAsync(self.StringId, function(Data)
-			Data = Data or {}
+	local rejected = false
+	local success, record = pcall(function()
+		return Session:UpdateAsync(playerId, function(currentRecord)
+			rejected = false
+			local current: any = if typeof(currentRecord) == "table" then currentRecord else {}
+			local currentLock = current.Session
+			local now = os.time()
 
-			Data.Session = {
+			if validateOnly == true then
+				if typeof(currentLock) ~= "table"
+					or currentLock.JobId ~= game.JobId
+					or currentLock.PlaceId ~= game.PlaceId
+					or currentLock.Token ~= token
+				then
+					rejected = true
+					return nil
+				end
+			elseif typeof(currentLock) == "table" and currentLock.JobId ~= game.JobId then
+				local leaseIsActive = typeof(currentLock.ExpiresAt) ~= "number" or currentLock.ExpiresAt > now
+				if leaseIsActive then
+					rejected = true
+					return nil
+				end
+			end
+
+			current.Session = {
 				JobId = game.JobId,
 				PlaceId = game.PlaceId,
+				Token = token,
+				ExpiresAt = now + SESSION_LEASE_SECONDS,
 			}
-
-			return Data
+			return current
 		end)
 	end)
 
-	if not succ then
-		self:UpdateSessionOrGet()
-	elseif succ and data then
-		return data
+	if not success then
+		self:Debug("warn", `Failed to update session for player: {self.Player.Name}: {record}`)
+		return nil, "error"
 	end
 
-	return nil
+	if rejected or typeof(record) ~= "table" or typeof(record.Session) ~= "table" then
+		return nil, "conflict"
+	end
+
+	local session = record.Session
+	if session.JobId ~= game.JobId or session.PlaceId ~= game.PlaceId or session.Token ~= token then
+		return nil, "conflict"
+	end
+
+	return session, nil
 end
 
 return DataStore

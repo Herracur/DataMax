@@ -1,20 +1,50 @@
 # DataMax
 
-**DataMax** is a data management framework for Roblox designed to make storing, accessing, and managing player data simple and convenient. It provides an easy-to-use API for working with different data stores while helping developers organize their data efficiently.
+**DataMax** is a data management framework for Roblox that makes working with player data easier. It provides a simple way to store, load, update, and manage data without having to deal with all the complexity of Roblox DataStores yourself.
 
-One of DataMax's key features is its **cache system**, which provides fast access to data and allows critical changes to be handled in memory before being saved to persistent storage. This is especially useful for frequently updated or time-sensitive data, helping developers manage important changes without needing to perform a DataStore operation for every modification.
+DataMax uses a modular structure to keep things organized and easy to maintain. It also comes with a built-in caching system, allowing you to work with data in memory and save changes to DataStores when needed.
 
-DataMax also provides **a separate cache for each store**, keeping data organized and independent. This structure makes it easier to manage different types of player data, such as inventories, currencies, statistics, and other game-related information, without mixing their cached data together.
+Each store has its own cache, so data stays separated and organized. This makes it easier to manage different types of player data, such as inventories, currencies, and statistics.
 
-With its straightforward API and organized data management approach, DataMax aims to reduce the complexity of working with Roblox DataStores and give developers a more convenient way to handle player data in their games.
+## Features
 
-## Key Features
+- **Modular Structure** — Different parts of DataMax are separated into modules, making the code easier to maintain and improve.
+- **Caching System** — Work with cached data instead of making a DataStore request every time you need to access or modify something.
+- **Per-Store Caching** — Each store has its own cache, keeping its data separate from other stores.
+- **Easy Data Management** — Use simple methods like `Set`, `Add`, `Remove`, and `Update` to manage your data.
+- **Automatic Saving** — Let DataMax save data automatically at configured intervals.
+- **Session Management** — Helps prevent multiple servers from conflicting when accessing the same player's data.
+- **Debugging** — Built-in debugging tools make it easier to follow what's happening and find potential problems.
+- **Helper Functions** — Includes additional functions that handle common internal operations.
+- **Type Definitions** — Organized type definitions make the code easier to understand and work with.
 
-- **Fast Data Access** — Access cached data without repeatedly requesting it from Roblox DataStores.
-- **Per-Store Caching** — Each store maintains its own cache, keeping data organized and independent.
-- **Convenient Data Management** — Use simple methods such as `Set`, `Add`, `Remove`, and `Update` to manage data.
-- **Automatic Saving** — Automatically save data at configured intervals.
-- **Session Management** — Manage player data sessions to help prevent conflicting access from different servers.
-- **Simple Integration** — Designed to make data management easier to set up and use in Roblox projects.
+## Project Structure
 
-DataMax is built to provide developers with a straightforward foundation for managing player data, whether they are building a small game or a larger Roblox experience.
+DataMax is divided into separate modules, each with its own responsibility.
+
+| Module | Description |
+|---|---|
+| Data | Handles loading, saving, and modifying data. |
+| Cache | Manages cached data for each store. |
+| Types | Contains shared type definitions. |
+| Helper Functions | Handles additional operations used by the main modules. |
+
+## Available Methods
+
+Some of the main methods provided by DataMax:
+
+- `GetData()`
+- `Set()`
+- `Add()`
+- `Remove()`
+- `Update()`
+- `SaveData()`
+- `WaitForLoad()`
+
+## About DataMax
+
+DataMax started as a small project to make working with Roblox DataStores less complicated. Over time, it has grown with new features, improvements, bug fixes, and changes to its internal structure.
+
+The goal is to keep data management simple for developers while making the framework flexible enough to grow alongside their projects.
+
+Whether you're working on a small game or a larger Roblox experience, DataMax aims to make handling player data a little easier.

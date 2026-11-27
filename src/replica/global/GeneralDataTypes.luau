@@ -5,6 +5,13 @@ export type DefaultTableValues = {
 	-- ... Add as much as you like
 } | { any }
 
+export type SessionLock = {
+	JobId: string,
+	PlaceId: number,
+	Token: string,
+	ExpiresAt: number,
+}
+
 export type self = {
 	Player: Player,
 	StringId: string,
@@ -49,7 +56,7 @@ export type self = {
 	Remove: (self: self, dataToRemove: AdditionalData) -> (),
 	Set: (self: self, newData: AdditionalData) -> (),
 	Update: (self: self, dataToUpdate: AdditionalData) -> (),
-	UpdateSessionOrGet: (self: self, get: boolean?) -> { [string]: string | number }?,
+	UpdateSessionOrGet: (self: self, validateOnly: boolean?) -> (SessionLock?, string?),
 }
 
 export type StoreType = "Table" | "OneValue"
